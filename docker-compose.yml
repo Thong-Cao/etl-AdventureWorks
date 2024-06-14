@@ -1,0 +1,111 @@
+version: '3.8'
+
+# Define the common image configuration for Hadoop
+x-hadoop-common: &hadoop-common
+  image: apache/hadoop:3
+  env_file: ./containers/hadoop/hadoop.env
+
+services:
+  # Airflow
+  airflow:
+    build: 
+      context: ./containers/airflow
+    env_file: ./containers/airflow/airflow.env
+    volumes:
+      - ./src/dags:/opt/airflow/dags
+      - ./src/etl:/opt/airflow/etl
+      - ./src/config:/opt/airflow/config
+      - ./logs/airflow:/opt/airflow/logs
+
+    ports:
+      - "8080:8080"
+    depends_on:
+      - db
+    networks:
+      - my_network
+
+  # Spark
+  spark-master:
+    image: bitnami/spark:3.5
+    env_file: ./containers/spark/spark-master.env
+    ports:
+      - 8081:8080
+    networks:
+      - my_network
+
+  spark-worker:
+    image: bitnami/spark:3.5
+    env_file: ./containers/spark/spark-worker.env 
+    networks:
+      - my_network
+
+  # HDFS
+  hdfs-namenode:
+    <<: *hadoop-common
+    hostname: namenode
+    command: ["hdfs", "namenode"]
+    ports:
+      - 9870:9870
+    environment:
+      - ENSURE_NAMENODE_DIR=/tmp/hadoop-hadoop/dfs/name
+    networks:
+      - my_network
+  
+  hdfs-datanode:
+    <<: *hadoop-common
+    command: ["hdfs", "datanode"]
+    networks:
+      - my_network
+
+  # Hive
+  hive-metastore:
+    image: apache/hive:4.0.0-alpha-2
+    depends_on:
+      - hdfs-namenode
+      - db
+    hostname: hive-metastore
+    environment:
+      - HIVE_CUSTOM_CONF_DIR=/hive-custom-conf
+      - SERVICE_NAME=metastore
+    volumes:
+      - ./containers/hive:/hive-custom-conf
+    networks:
+      - my_network
+
+  hive-server:
+    image: apache/hive:4.0.0-alpha-2
+    depends_on:
+      - hive-metastore
+    hostname: hive-server
+    environment:
+      - HIVE_SERVER2_THRIFT_PORT=10000
+      - HIVE_CUSTOM_CONF_DIR=/hive-custom-conf
+      - IS_RESUME=true
+      - SERVICE_NAME=hiveserver2
+    volumes:
+      - ./logs/hiveserver:/tmp/hive/
+      - ./containers/hive:/hive-custom-conf
+    ports:
+      - 10002:10002
+    networks:
+      - my_network
+
+  # PostgreSQL
+  db:
+    image: postgres:14.1-alpine
+    restart: always
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    ports:
+      - '5432:5432'
+    volumes: 
+      - ./db_adventurework:/var/lib/postgresql/data
+
+    networks:
+      - my_network
+
+# Define the network
+networks:
+  my_network:
+    driver: bridge
